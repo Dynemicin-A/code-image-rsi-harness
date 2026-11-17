@@ -159,7 +159,7 @@ def example():
                       "主材质可辨，光向局部矛盾", "主要表面与光向协调", "表面、遮挡及反光关系一致"]}},
             "generalization": {"author_model": "", "author_policy_sha256": "",
                 "method_sha256": "替换为冻结公共方法的 SHA256", "trusted_host": "受托宿主标识",
-            "runtime_image": "local:替换为冻结运行环境摘要", "backend": "local",
+            "runtime_image": "local:替换为冻结运行环境摘要", "backend": "填写本次选择的 adapter",
             "budget": {"attempts": 1, "render_budget": 1, "wall_seconds": 300},
                 "development": [{"id": "dev1", "prompt": "填写已见提示词", "family": "已见家族",
                                  "layout": "已见布局", "template": "已见模板"}],

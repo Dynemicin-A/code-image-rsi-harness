@@ -1,8 +1,8 @@
 # 纯代码生图与 RSI · 本地 v0.16
 
-当前目标是让文字模型利用冻结的公共代码在未见题上首次生成图像，达到同一 prompt 的既有 diffusion 参照积分的 90%。泛化是总验收的硬条件。主规则写在 [spec.md](spec.md) 开头。此目录包含规范、离线运行器、评估器和一项真实的公共方法修复。正式成绩仍待独立留出实验。
+当前目标是让文字模型利用冻结的公共代码在未见题上首次生成图像，达到同一 prompt 的既有 diffusion 参照积分的 90%。泛化是总验收的硬条件。主规则写在 [spec.md](spec.md) 开头。此目录包含规范、运行器、评估器和一个可选的历史后端回归样例。正式成绩仍待独立留出实验。
 
-## 从一次老实验中定位问题
+## 可选历史回归样例
 
 雨街花店的原生图中出现了面包，因为冻结渲染器写死了商品和褐色窗面。运行下面的命令可以重放当时那组证据下的调度决策。
 
@@ -24,7 +24,7 @@ python3 -B triage.py storefront/triage.json
 
 ## 本地复核
 
-在仓库根目录先运行 `python3 -m pip install -r requirements.txt`，再运行 `python3 -B -m unittest discover -v`。开发渲染器的 4 项测试单独在 `storefront/` 运行。测试数据中的示例评分仅用于验证门槛分支。
+核心测试只依赖 Python 标准库，可在仓库根目录运行 `python3 -B -m unittest discover -v`。`storefront/` 是旧雨街接口修复的可选回归样例，使用它时再安装 `python3 -m pip install -r storefront/requirements.txt` 并在该目录运行测试。新隔离实验不要求使用这个目录、这个题材或这个渲染后端。测试数据中的示例评分仅用于验证门槛分支。
 
 本地仓库的首次提交保存 v0.15 主规范（原 SHA-256 `9e29183f78db1db1aa1e1c77f66a0b34e640c5537c49ad9b07a2257773d37902`）和三份可读细则。原件来自相邻的 `harness_v0.15_quality_rsi/`。旧版文本提及的 v0.13 完整参考及外置盘运行目录不在此工作副本中。此次未迁移或恢复 zxh 上的旧实验。
 
@@ -39,4 +39,4 @@ python3 -B triage.py storefront/triage.json
 
 当前公开仓库没有以下历史或外部材料：`clean_runs/image_02/workspace_pre_zxh_storage_20261116_1306/method_track/execution_tests/roi24576/equivalence_result.json`、`clean_runs/probe_image_01/workspace/OUTPUT_INSPECTION.md`、zxh 上的旧 run、原始 teacher 图和旧版 v0.13 完整参考。这些路径只作为历史证据引用，缺失时不能运行对应复盘，也不能把历史数字当作当前 run 的实测结果。
 
-`storefront/` 的开发回归依赖 NumPy 和 Pillow，可用 `pip install -r storefront/requirements.txt` 安装。formal 评估还需要受托宿主实际提供访问日志、计时账本和盲评脱敏流程。仓库当前的 `quality_eval.py` 是评分逻辑起点，不能单独证明这些外部隔离事实。
+`storefront/` 的可选历史回归依赖 NumPy 和 Pillow，可用 `pip install -r storefront/requirements.txt` 安装。新 run 可以完全不读取这个目录。formal 评估还需要受托宿主实际提供访问日志、计时账本和盲评脱敏流程。仓库当前的 `quality_eval.py` 是评分逻辑起点，不能单独证明这些外部隔离事实。
