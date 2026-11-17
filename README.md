@@ -1,42 +1,61 @@
-# 纯代码生图与 RSI · 本地 v0.16
+# 纯代码生图与 RSI Harness
 
-当前目标是让文字模型利用冻结的公共代码在未见题上首次生成图像，达到同一 prompt 的既有 diffusion 参照积分的 90%。泛化是总验收的硬条件。主规则写在 [spec.md](spec.md) 开头。此目录包含规范、运行器、评估器和一个可选的历史后端回归样例。正式成绩仍待独立留出实验。
+本仓库用于启动一个全新的、可审计的 code-to-image RSI 实验。作者只接收文字 prompt 和冻结的公共方法接口，必须以代码构造图像；实验全程禁用 `image-gen`、图生图、外部图像生成模型和目标图拟合。泛化是硬性验收条件：单题高分、局部修复、速度提升或完整封包都不能替代未见题上的正式结果。
 
-## 可选历史回归样例
+实验合同和执行规则见 [spec.md](spec.md)、[安全与规范细则.md](安全与规范细则.md)、[执行效率细则.md](执行效率细则.md)、[质量与RSI执行细则.md](质量与RSI执行细则.md) 和 [隔离实验_v0.1_6h_泛化与RSI.md](隔离实验_v0.1_6h_泛化与RSI.md)。规范不规定题材、构图、材质、镜头、渲染语言或后端；每轮由 agent 根据测量结果选择并记录方案。
 
-雨街花店的原生图中出现了面包，因为冻结渲染器写死了商品和褐色窗面。运行下面的命令可以重放当时那组证据下的调度决策。
+## 新实验流程
+
+1. 评估方运行 `python3 quality_eval.py example` 取得合同示例，填入本轮的 prompt、合法的同 prompt diffusion 参照、语义硬条件、盲评量表、作者模型、策略摘要、方法摘要、运行环境和预算。正式合同使用 `purpose=formal`。
+2. 评估方运行 `python3 quality_eval.py freeze contract.json lock.json` 冻结方法哈希、题集、参照哈希、作者策略和每题预算。运行 `python3 quality_eval.py prompts lock.json` 逐题派发；作者上下文只包含当前文字题、冻结公共接口和必要的执行约定。
+3. 作者提交一次 `build(prompt)` 实现。评估宿主可直接运行 `python3 first_pass.py task.json method.py program.py runs/registry --timeout 120`，不需要 Docker。该适配器读取独立临时目录，执行本地 Python 进程，限制场景描述和图像尺寸，并记录退出状态、耗时、RGB 图哈希和回执。宿主必须另外提供进程、ACL、网络和文件读取证据；普通本地子进程本身不能证明安全隔离。
+4. 后端由 agent 自主选择。Blender、Python、SVG、GPU、自定义光栅器、二维或三维混合方案均可使用，也可以实现新的 adapter。每个候选必须记录后端版本、依赖、设备、随机约定、输入边界、方法哈希、原生完整输出和失败回执。不得把图像生成模型、扩散采样器或外部图像 API 包装成后端。
+5. 评估方运行 `python3 quality_eval.py prepare lock.json candidates.json packet` 生成匿名盲评包，将 `review/reviewer-*` 分给独立评审。评审逐题核对语义硬条件和量表锚点；评估宿主保存题库、参照、映射、日志和完整分母。
+6. 评估方运行 `python3 quality_eval.py score lock.json packet --host-attestation trusted.json` 结算结果。退出码 `0` 只表示正式质量和泛化同时通过，`1` 表示未通过或证据不足，`2` 表示输入或合同错误。唯一通过状态为 `meets_quality_and_generalization_on_declared_holdouts`。
+
+## 六小时隔离实验
+
+[隔离实验_v0.1_6h_泛化与RSI.md](隔离实验_v0.1_6h_泛化与RSI.md) 定义至少 21,600 秒有效研究墙钟、agent 放权、后端无关性、未见 prompt 泛化、subagent 盲评、增长／潜力／无进展／阻塞结算和停止条件。48 张只是可调整的启动规模；实际批次、分布覆盖和有效时间必须以 append-only 台账和宿主证据为准。没有实测证据时不得宣称质量、泛化或效率达标。
+
+每轮 RSI 必须写明问题、假设、选择理由、预期改变、反证条件、实际测量和下一决策。`growth` 需要可复核的基线差异；`potential` 需要下一步可证伪的实验和支持证据。低信息探针、空队列、等待或自报成功不能伪装成增长。
+
+## 本地运行
+
+核心测试只依赖 Python 标准库：
 
 ```sh
-python3 -B triage.py storefront/triage.json
+python3 -B -m unittest discover -v
 ```
 
-输入同时登记了泛化缺口和它依赖的源码问题，返回的下一步指向橱窗接口。这里的 10 秒为探针预估；没有分阶段实测时，开销热点为空。新版接口接收可组合的窗内几何及玻璃色，开发图中能辨认花瓶和书架。保留旧输入时，用同一环境运行旧版和新版得到一致的原生 RGB。两种店面都属于同一街景模板，跨题材验收仍然开放。详见 [源文件、消融及复现记录](storefront/README.md)。
+不安装 Docker、不要求固定渲染器，也不要求额外的仓库外文件。宿主可通过 `RSI_PYTHON` 指定 Python 解释器；后端自身的依赖、编译器和设备由该候选的 manifest 声明并由受托宿主安装或提供。
 
-`triage.py` 根据已登记的观察、依赖、实验及非重叠阶段耗时作选择，不能自行看图找出没有登记的缺陷。空队列只触发独立验收。复盘开销可参考同一 work 下的既有记录 `clean_runs/image_02/workspace_pre_zxh_storage_20261116_1306/method_track/execution_tests/roi24576/equivalence_result.json`。在那次 24,576 区域的同图拟合中，耗时从 465.25 秒降至 11.00 秒，状态与 PNG 字节一致。该记录只回答那个算子的耗时问题。当前研究没有端到端 RSI 加速或策略收益成绩。
+## 运行产物
 
-## 正式验收入口
+新 run 的登记目录由宿主创建，建议包含：
 
-1. 评估方运行 `python3 quality_eval.py example` 取得合同示例。填写原始题目、同 prompt 的既有 diffusion 原件及来源、未见家族与布局、可辨识的语义条件、带锚点的整图量表、评审名单、开发清单、作者模型与策略摘要、方法和镜像摘要及每题预算。正式合同使用 `purpose=formal`。若来源或独立性无法建立，只能记开发结果。
-2. 评估方用 `python3 quality_eval.py freeze contract.json lock.json` 冻结。由宿主运行 `python3 quality_eval.py prompts lock.json`，把数组拆成单题，再给每个隔离的作者上下文。各题作者只得到该题文字、同一冻结公共方法接口和必要的执行约定。参考路径、整份题库、其他作者程序、评分及结果留在评估侧。
-3. 作者提交实现 `build(prompt)` 的 Python 源码。评估宿主在同一登记目录运行 `python3 first_pass.py task.json method.py program.py runs/registry --timeout 120`。超时时间取冻结预算。当前运行器默认使用本地 Python 进程，读取独立临时目录，网络环境由受托宿主关闭，失败也占该题的尝试。作者程序输出 JSON 场景，冻结模块负责 `method.render(scene)` 并返回 RGB 图。当前适配器支持一个公共 Python 模块、1 MiB 场景描述、最长边 4096；其他后端需另行实现同等边界。`RSI_PYTHON` 可以指定受托宿主使用的 Python 解释器。普通本地子进程不自动证明安全隔离，正式实验必须保留宿主的进程、ACL、网络和读取日志。
-4. 评估方提供候选索引，每项含 `id`、`prompt_sha256`、`image` 和 `receipt`，后两项指向登记产生的文件。运行 `python3 quality_eval.py prepare lock.json candidates.json packet`，把匿名的 `review/reviewer-*` 分别交给评审。每项可填单一锚点或上下限；双方各自检查该题硬条件。评估方从受托宿主另取证言，表结构可用 `python3 quality_eval.py host-example` 导出。受托方须核对作者侧实际权限、完整首次提交历史、素材来源、方法冻结和模板血缘。回执哈希只绑定记录；共用一台机器时，登记册和证言来源须由评估宿主管理。
-5. `python3 quality_eval.py score lock.json packet --host-attestation trusted.json` 输出逐题原分、家族和布局的保守比值与总状态。**退出码 0 只用于正式质量与泛化同时通过，1 表示总验收未通过或证据不足，2 表示输入或合同错误。** 唯一通过状态为 `meets_quality_and_generalization_on_declared_holdouts`。已见题、选片、未评分、弱参照、单一族、缺少首发／证言等条件均无法通过。不得用开发分或描述性总均分代替这个状态。
+```text
+runs/<run_id>/
+  contract.json
+  method/
+  author_prompts/
+  development/
+  holdout/
+  reviewers/
+  events.jsonl
+  receipts/
+  reports/
+  checkpoints/
+  STOP_REQUEST
+```
 
-## 本地复核
+合同、题集、参照、作者代码、图像、回执、评审批次、心跳、计时账本和 `round_<id>_close.json` 均由 run 产生并写入登记目录；它们不需要预先存在于代码仓库。正式评估还需要受托宿主提供真实访问日志、权限边界、网络状态、方法冻结和盲评脱敏证据。
 
-核心测试只依赖 Python 标准库，可在仓库根目录运行 `python3 -B -m unittest discover -v`。`storefront/` 是旧雨街接口修复的可选回归样例，使用它时再安装 `python3 -m pip install -r storefront/requirements.txt` 并在该目录运行测试。新隔离实验不要求使用这个目录、这个题材或这个渲染后端。测试数据中的示例评分仅用于验证门槛分支。
+## 文件清单
 
-本地仓库的首次提交保存 v0.15 主规范（原 SHA-256 `9e29183f78db1db1aa1e1c77f66a0b34e640c5537c49ad9b07a2257773d37902`）和三份可读细则。原件来自相邻的 `harness_v0.15_quality_rsi/`。旧版文本提及的 v0.13 完整参考及外置盘运行目录不在此工作副本中。此次未迁移或恢复 zxh 上的旧实验。
-
-## 文件可用性
-
-克隆仓库后，规范、源码、测试、示例 triage 状态和隔离实验 runbook 都在仓库中。下面这些文件由新 run 或受托评估宿主创建，不应期待它们出现在代码仓库里：
-
-- `contract.json`、`lock.json`、`candidates.json`、`task.json`、`trusted.json`
-- `method.py`、`program.py`、每题 `receipt.json`、`image.png`
-- `runs/<run_id>/` 下的 `events.jsonl`、心跳、账本、评审批次、`round_<id>_close.json` 和报告
-- 评估侧保存的 diffusion 参照、隐藏题库、A/B 映射和正式评分
-
-当前公开仓库没有以下历史或外部材料：`clean_runs/image_02/workspace_pre_zxh_storage_20261116_1306/method_track/execution_tests/roi24576/equivalence_result.json`、`clean_runs/probe_image_01/workspace/OUTPUT_INSPECTION.md`、zxh 上的旧 run、原始 teacher 图和旧版 v0.13 完整参考。这些路径只作为历史证据引用，缺失时不能运行对应复盘，也不能把历史数字当作当前 run 的实测结果。
-
-`storefront/` 的可选历史回归依赖 NumPy 和 Pillow，可用 `pip install -r storefront/requirements.txt` 安装。新 run 可以完全不读取这个目录。formal 评估还需要受托宿主实际提供访问日志、计时账本和盲评脱敏流程。仓库当前的 `quality_eval.py` 是评分逻辑起点，不能单独证明这些外部隔离事实。
+- `first_pass.py`：无 Docker 的本地 Python 适配器。
+- `quality_eval.py`：合同冻结、盲评包准备、宿主证言和正式评分。
+- `triage.py`：依据登记的观察、依赖、实验和分阶段耗时选择下一步。
+- `spec.md`：主合同和验收条件。
+- `安全与规范细则.md`、`执行效率细则.md`、`质量与RSI执行细则.md`：执行约束。
+- `隔离实验_v0.1_6h_泛化与RSI.md`：本轮六小时新实验 runbook。
+- `test_*.py`：标准库单元测试。
