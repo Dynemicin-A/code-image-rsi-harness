@@ -6,12 +6,13 @@
 
 ## 新实验流程
 
-1. 评估方运行 `python3 quality_eval.py example` 取得合同示例，填入本轮的 prompt、合法的同 prompt diffusion 参照、语义硬条件、盲评量表、作者模型、策略摘要、方法摘要、运行环境和预算。正式合同使用 `purpose=formal`。
+1. 评估方运行 `python3 quality_eval.py example` 取得合同示例，填入本轮的 prompt、合法的同 prompt diffusion 参照、语义硬条件、盲评量表、至少两个独立评审、作者模型、策略摘要、方法摘要、运行环境、至少 48 道留出题和有效研究时间下限。正式合同使用 `purpose=formal`。
 2. 评估方运行 `python3 quality_eval.py freeze contract.json lock.json` 冻结方法哈希、题集、参照哈希、作者策略和每题预算。运行 `python3 quality_eval.py prompts lock.json` 逐题派发；作者上下文只包含当前文字题、冻结公共接口和必要的执行约定。
 3. 作者提交一次 `build(prompt)` 实现。评估宿主可直接运行 `python3 first_pass.py task.json method.py program.py runs/registry --timeout 120`，不需要 Docker。该适配器读取独立临时目录，执行本地 Python 进程，限制场景描述和图像尺寸，并记录退出状态、耗时、RGB 图哈希和回执。宿主必须另外提供进程、ACL、网络和文件读取证据；普通本地子进程本身不能证明安全隔离。
 4. 后端由 agent 自主选择。Blender、Python、SVG、GPU、自定义光栅器、二维或三维混合方案均可使用，也可以实现新的 adapter。每个候选必须记录后端版本、依赖、设备、随机约定、输入边界、方法哈希、原生完整输出和失败回执。不得把图像生成模型、扩散采样器或外部图像 API 包装成后端。
-5. 评估方运行 `python3 quality_eval.py prepare lock.json candidates.json packet` 生成匿名盲评包，将 `review/reviewer-*` 分给独立评审。评审逐题核对语义硬条件和量表锚点；评估宿主保存题库、参照、映射、日志和完整分母。
-6. 评估方运行 `python3 quality_eval.py score lock.json packet --host-attestation trusted.json` 结算结果。退出码 `0` 只表示正式质量和泛化同时通过，`1` 表示未通过或证据不足，`2` 表示输入或合同错误。唯一通过状态为 `meets_quality_and_generalization_on_declared_holdouts`。
+5. 评估方运行 `python3 quality_eval.py prepare lock.json candidates.json packet` 生成匿名盲评包。正式包在复制图像前校验每题首发回执、方法／运行环境／图像哈希和一次性预算；将 `review/reviewer-*` 分给独立评审。评审逐题核对语义硬条件和量表锚点；评估宿主保存题库、参照、映射、日志和完整分母。
+6. 评估方运行 `python3 quality_eval.py score lock.json packet --host-attestation trusted.json` 结算结果。受托声明必须包含网络、ACL、资源、宿主凭据、评审独立性和有效计时账本证据。退出码 `0` 只表示正式质量和泛化同时通过，`1` 表示未通过或证据不足，`2` 表示输入或合同错误。唯一通过状态为 `meets_quality_and_generalization_on_declared_holdouts`。
+7. 每轮关闭前运行 `python3 quality_eval.py validate-round runs/<run_id>/reports/round_<id>_close.json`，校验 `growth`、`potential`、`no_progress` 或 `blocked` 的证据结构；该命令不替代图像、回执或宿主真实性核验。
 
 ## 六小时隔离实验
 
@@ -27,7 +28,7 @@
 python3 -B -m unittest discover -v
 ```
 
-不安装 Docker、不要求固定渲染器，也不要求额外的仓库外文件。宿主可通过 `RSI_PYTHON` 指定 Python 解释器；后端自身的依赖、编译器和设备由该候选的 manifest 声明并由受托宿主安装或提供。
+不安装 Docker、不要求固定渲染器，也不要求额外的仓库外文件。宿主可通过 `RSI_PYTHON` 指定 Python 解释器；运行器会把实际解释器摘要写入回执。后端自身的依赖、编译器和设备由该候选的 manifest 声明并由受托宿主安装或提供。运行器限制输出尺寸和场景大小，但 CPU、内存、网络、ACL 和进程回收仍由受托宿主落实。
 
 ## 运行产物
 

@@ -151,6 +151,17 @@ class QualityTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "评分需"):
             q.score(self.lock, self.packet)
 
+    def test_round_close_validator_requires_evidence(self):
+        close = self.root / "round.json"
+        q.write_new(close, {"schema": "rsi.round_close.v1", "round_id": "r1",
+                            "parent_method_sha256": "a" * 64, "candidate_method_sha256": "b" * 64,
+                            "decision": "growth", "growth_evidence": [], "potential_evidence": [],
+                            "failed_cases": [], "new_holdout_coverage": [], "regressions": [],
+                            "wall_seconds": 1, "compute_seconds": 1, "images_created": 1,
+                            "images_reviewed": 1, "subagent_reviews": [], "next_action": "next"})
+        with self.assertRaisesRegex(ValueError, "growth"):
+            q.validate_round(close)
+
 
 class HoldoutTest(unittest.TestCase):
     def setUp(self):
@@ -162,10 +173,12 @@ class HoldoutTest(unittest.TestCase):
         self.packet = self.root / "packet"
         self.host = self.root / "trusted.json"
         self.spec = q.example()
-        self.spec.update(purpose="formal", reference_method="synthetic test", judges=["test judge"])
+        self.spec.update(purpose="formal", reference_method="synthetic test", judges=["test judge 1", "test judge 2"])
         self.spec["generalization"].update(author_model="test author", author_policy_sha256="d" * 64,
                                            method_sha256="a" * 64, runtime_image="sha256:" + "b" * 64,
-                                           required_families=["coast", "machine"], required_layouts=["side", "cutaway"])
+                                           required_families=["coast", "machine"], required_layouts=["side", "cutaway"],
+                                           min_holdout_cases=2, min_cases_per_family=1,
+                                           min_cases_per_layout=1, minimum_effective_wall_seconds=0)
         self.spec["cases"] = []
         for i, (family, layout) in enumerate(zip(["coast", "machine"], ["side", "cutaway"])):
             case_id = f"case-{i}"
@@ -186,6 +199,7 @@ class HoldoutTest(unittest.TestCase):
         host = q.host_example()
         example = {**host["cases"][0], **dict.fromkeys(q.CASE_FACTS, True)}
         host.update(dict.fromkeys(q.HOST_FACTS, True))
+        host.update(effective_wall_seconds=0, time_ledger_sha256="e" * 64)
         host.update(contract=lock["id"], host=self.spec["generalization"]["trusted_host"], cases=[])
         candidates = []
         for manifest in q.prompts(self.lock):
@@ -212,15 +226,15 @@ class HoldoutTest(unittest.TestCase):
         q.prepare(self.lock, candidates_path, self.packet)
 
     def rate(self, case_scores):
-        panel = q.read(self.packet / "private.json")["key"]["panels"][0]
-        form = self.packet / "review" / panel["label"] / "ratings.json"
-        sheet = q.read(form)
-        for row, assignment, (code_score, ref_score) in zip(sheet["rows"], panel["assignments"], case_scores):
-            for side in ("A", "B"):
-                value = code_score if side == assignment["code_side"] else ref_score
-                row[side]["scores"] = dict.fromkeys(row[side]["scores"], value)
-                row[side]["hard"] = dict.fromkeys(row[side]["hard"], True)
-        form.write_text(json.dumps(sheet))
+        for panel in q.read(self.packet / "private.json")["key"]["panels"]:
+            form = self.packet / "review" / panel["label"] / "ratings.json"
+            sheet = q.read(form)
+            for row, assignment, (code_score, ref_score) in zip(sheet["rows"], panel["assignments"], case_scores):
+                for side in ("A", "B"):
+                    value = code_score if side == assignment["code_side"] else ref_score
+                    row[side]["scores"] = dict.fromkeys(row[side]["scores"], value)
+                    row[side]["hard"] = dict.fromkeys(row[side]["hard"], True)
+            form.write_text(json.dumps(sheet))
 
     def result(self):
         return q.score(self.lock, self.packet, self.host)
@@ -255,23 +269,16 @@ class HoldoutTest(unittest.TestCase):
             self.freeze()
 
     def test_unapproved_method_entry_and_author_model_use(self):
-        self.prepare(lambda cid, r: r.update(method_entry="program.render"))
-        self.rate([(4, 4), (4, 4)])
-        self.assertEqual(self.result()["status"], "insufficient_generalization_evidence")
-        host = q.read(self.host)
-        host["cases"][0]["no_image_generation_models"] = False
-        self.host.write_text(json.dumps(host))
-        self.assertTrue(any("宿主" in issue for issue in self.result()["holdout_evidence_issues"]))
+        with self.assertRaisesRegex(ValueError, "候选回执"):
+            self.prepare(lambda cid, r: r.update(method_entry="program.render"))
 
     def test_missing_receipt(self):
-        self.prepare(all_receipts=False)
-        self.rate([(4, 4), (4, 4)])
-        self.assertEqual(self.result()["status"], "insufficient_generalization_evidence")
+        with self.assertRaisesRegex(ValueError, "缺少首次执行回执"):
+            self.prepare(all_receipts=False)
 
     def test_budget_and_sha_receipt_binding(self):
-        self.prepare(lambda cid, r: r.update(attempt=2, image_sha256="d" * 64, wall_seconds=9999))
-        self.rate([(4, 4), (4, 4)])
-        self.assertEqual(self.result()["status"], "insufficient_generalization_evidence")
+        with self.assertRaisesRegex(ValueError, "候选回执"):
+            self.prepare(lambda cid, r: r.update(attempt=2, image_sha256="d" * 64, wall_seconds=9999))
 
     def test_renamed_template_and_single_family(self):
         self.spec["cases"][1]["template"] = self.spec["cases"][0]["template"]

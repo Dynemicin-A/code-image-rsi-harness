@@ -57,6 +57,10 @@ class FirstSubmissionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "exited"):
             record(self.task, METHOD, b'def build(prompt): raise ValueError("broken")', self.registry, 30)
         receipt = next(self.registry.rglob('receipt.json'))
+        case = receipt.parent
         self.assertEqual(json.loads(receipt.read_text())['status'], 'failed')
+        self.assertEqual((case / 'method.py').read_bytes(), METHOD)
+        self.assertEqual((case / 'program.py').read_bytes(), b'def build(prompt): raise ValueError("broken")')
+        self.assertEqual((case / 'prompt.txt').read_text(), 'red')
         with self.assertRaisesRegex(ValueError, "already claimed"):
             record(self.task, METHOD, PROGRAM, self.registry, 30)

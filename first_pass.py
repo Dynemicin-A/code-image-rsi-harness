@@ -7,13 +7,13 @@ JSON scene plan. In a fresh interpreter the frozen method.render(plan) returns
 one RGB PIL.Image. This adapter accepts a single frozen Python module.
 """
 import argparse
+from datetime import datetime, timezone
 import hashlib
 import json
 import os
 from pathlib import Path
 import platform
 import re
-import shutil
 import struct
 import subprocess
 import sys
@@ -80,15 +80,23 @@ def make_png(raw):
 
 
 def local_runtime():
-    identity = "|".join((sys.executable, sys.version, platform.platform()))
+    executable = runtime_executable()
+    identity = "|".join((str(executable), sys.version, platform.platform()))
     return "local:" + digest(identity.encode())
 
 
-def run_local(scratch, inputs, timeout):
+def runtime_executable():
+    configured = os.environ.get("RSI_PYTHON", "").strip()
+    executable = Path(configured or sys.executable).expanduser()
+    if not executable.is_file() or not os.access(executable, os.X_OK):
+        raise ValueError("RSI_PYTHON must name an executable Python interpreter")
+    return executable.resolve()
+
+
+def run_local(scratch, inputs, timeout, details):
     scene = scratch / "scene.json"
     output = scratch / "pixels"
-    outdir = scratch / "out"
-    outdir.mkdir()
+    executable = runtime_executable()
     environment = {
         "PATH": os.environ.get("PATH", ""),
         "PYTHONNOUSERSITE": "1",
@@ -103,11 +111,26 @@ def run_local(scratch, inputs, timeout):
     for script in ("builder.py", "driver.py"):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
+            details["timeout"] = True
             raise ValueError("render time budget exceeded")
-        proc = subprocess.run([sys.executable, "-I", str(inputs / script)], cwd=scratch,
-                              env=environment, stdout=subprocess.DEVNULL,
-                              stderr=subprocess.PIPE, timeout=remaining, check=False)
-        errors.append(proc.stderr[-4096:])
+        phase_start = time.monotonic()
+        try:
+            proc = subprocess.run([str(executable), "-I", str(inputs / script)], cwd=scratch,
+                                  env=environment, stdout=subprocess.DEVNULL,
+                                  stderr=subprocess.PIPE, timeout=remaining, check=False)
+        except subprocess.TimeoutExpired as error:
+            details["timeout"] = True
+            details["phases"].append({"name": script[:-3], "wall_seconds": time.monotonic() - phase_start,
+                                      "returncode": None, "stderr_tail": str(error.stderr or b"")[-4096:]})
+            raise ValueError(f"{script[:-3]} timed out") from error
+        except OSError as error:
+            details["phases"].append({"name": script[:-3], "wall_seconds": time.monotonic() - phase_start,
+                                      "returncode": None, "stderr_tail": str(error)[-4096:]})
+            raise ValueError(f"could not start {script[:-3]}") from error
+        stderr_tail = proc.stderr[-4096:].decode("utf-8", "replace") if proc.stderr else ""
+        errors.append(proc.stderr[-4096:] if proc.stderr else b"")
+        details["phases"].append({"name": script[:-3], "wall_seconds": time.monotonic() - phase_start,
+                                  "returncode": proc.returncode, "stderr_tail": stderr_tail})
         if proc.returncode:
             (scratch / "stderr_tail.txt").write_bytes(b"".join(errors))
             raise ValueError(f"local renderer exited {proc.returncode}")
@@ -118,6 +141,8 @@ def run_local(scratch, inputs, timeout):
 
 def record(task, method, program, registry, timeout):
     expected = ("contract", "method_sha256", "prompt_sha256")
+    if not isinstance(task, dict) or any(not isinstance(task.get(k), str) for k in ("id", "prompt", *expected)):
+        raise ValueError("task requires string id, prompt, contract and digests")
     if any(not re.fullmatch("[0-9a-f]{64}", task[k]) for k in expected):
         raise ValueError("task requires frozen contract, method and prompt digests")
     if not isinstance(task["id"], str) or not task["id"].strip() or not task["prompt"].strip():
@@ -138,12 +163,16 @@ def record(task, method, program, registry, timeout):
     backend = task.get("backend", "local")
     if backend != "local":
         raise ValueError("this no-Docker runner supports backend=local")
+    details = {"runtime_executable": str(runtime_executable()), "timeout": False, "phases": []}
     receipt = {"schema": "rsi.first_pass.v1", "status": "claimed",
                **{k: task[k] for k in (*expected, "id")}, "attempt": 1, "render_budget": 1,
-               "reference_inputs": 0, "network": "none", "runtime_image": task.get("runtime_image", local_runtime()),
+               "reference_inputs": 0, "network": "unverified", "runtime_image": task.get("runtime_image", local_runtime()),
                "backend": backend, "sandbox": "host-provided-local-process",
-               "method_entry": "method.render", "program_sha256": digest(program)}
+               "method_entry": "method.render", "program_sha256": digest(program),
+               "started_utc": datetime.now(timezone.utc).isoformat(), "runtime": details}
     save_json(case / "receipt.json", receipt)
+    for filename, data in (("method.py", method), ("program.py", program), ("prompt.txt", prompt)):
+        (case / filename).write_bytes(data)
     start = time.monotonic()
     try:
         with tempfile.TemporaryDirectory() as temp:
@@ -156,18 +185,17 @@ def record(task, method, program, registry, timeout):
                 path = inputs / filename
                 path.write_bytes(data)
                 path.chmod(0o444)
-            output = run_local(scratch, inputs, timeout)
+            output = run_local(scratch, inputs, timeout, details)
             png, size = make_png(output)
             (case / "image.png").write_bytes(png)
-            # Retain the exact submission for cold replay; omit evaluator files.
-            for filename in ("method.py", "program.py", "prompt.txt"):
-                shutil.copyfile(inputs / filename, case / filename)
             receipt.update(status="rendered", image_sha256=digest(png), size=list(size))
     except BaseException as error:
-        receipt.update(status="failed", error=str(error))
+        receipt.update(status="failed", error=str(error), error_type=type(error).__name__)
         raise
     finally:
         receipt["wall_seconds"] = time.monotonic() - start
+        receipt["ended_utc"] = datetime.now(timezone.utc).isoformat()
+        receipt["runtime"] = details
         save_json(case / "receipt.json", receipt)
     return case
 

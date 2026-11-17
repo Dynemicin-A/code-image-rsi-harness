@@ -109,9 +109,21 @@ def validate_holdout(spec):
             type(budget["render_budget"]) is int and budget["render_budget"] == 1 and
             number(budget["wall_seconds"]) and budget["wall_seconds"] > 0, "需冻结单次生成预算")
     require(isinstance(gen["trusted_host"], str) and gen["trusted_host"].strip(), "须声明受托宿主")
+    require(len(spec["judges"]) >= 2, "正式评估至少需要两个独立评审")
+    require(type(gen.get("min_holdout_cases")) is int and gen["min_holdout_cases"] >= 2,
+            "正式合同须声明至少两道留出题")
+    require(type(gen.get("min_cases_per_family")) is int and gen["min_cases_per_family"] >= 1,
+            "正式合同须声明每家族最小题数")
+    require(type(gen.get("min_cases_per_layout")) is int and gen["min_cases_per_layout"] >= 1,
+            "正式合同须声明每布局最小题数")
+    require(type(gen.get("minimum_effective_wall_seconds")) in (int, float)
+            and math.isfinite(gen["minimum_effective_wall_seconds"])
+            and gen["minimum_effective_wall_seconds"] >= 0,
+            "正式合同须声明有效研究时间下限")
     dev = gen["development"]
     cases = spec["cases"]
     require(isinstance(dev, list), "需冻结开发题目清单")
+    require(len(cases) >= gen["min_holdout_cases"], "留出题数量低于冻结的最小规模")
     for row in dev + cases:
         for field in ("id", "prompt", "family", "layout", "template"):
             require(isinstance(row[field], str) and normalized(row[field]), f"题目缺少 {field}")
@@ -125,6 +137,9 @@ def validate_holdout(spec):
         required = gen["required_" + plural]
         require(texts(required) and len({normalized(v) for v in required}) == len(required) >= 2
                 and {c[field] for c in cases} == set(required), f"至少两个独立留出 {field} 且完全覆盖")
+        minimum = gen["min_cases_per_" + field]
+        counts = {group: sum(normalized(c[field]) == normalized(group) for c in cases) for group in required}
+        require(all(count >= minimum for count in counts.values()), f"每个留出 {field} 至少需要 {minimum} 道题")
     origins = {}
     for c in cases:
         template = normalized(c["template"])
@@ -136,7 +151,10 @@ HOST_FACTS = ("development_inventory_complete", "method_frozen_before_holdout_ac
               "method_contains_no_holdout_examples", "families_and_layouts_independently_reviewed",
               "author_model_and_policy_unchanged", "single_operator_owned_registry",
               "references_are_existing_diffusion_outputs_for_exact_prompts",
-              "rubric_covers_whole_image_and_required_prompt_semantics")
+              "rubric_covers_whole_image_and_required_prompt_semantics",
+              "network_isolation_verified", "filesystem_acl_verified",
+              "resource_limits_verified", "no_host_credentials_exposed",
+              "reviewer_contexts_are_independent")
 CASE_FACTS = ("held_out_from_development", "independent_not_paraphrase_or_template_reuse",
               "first_authored_program", "no_embedded_reference_or_candidate_image_refinement",
               "author_context_isolated", "no_reference_or_feedback_or_selection",
@@ -145,13 +163,14 @@ CASE_FACTS = ("held_out_from_development", "independent_not_paraphrase_or_templa
 
 def host_example():
     return {"schema": "rsi.holdout_attestation.v1", "host": "受托宿主标识", "contract": "锁的 id",
+            "effective_wall_seconds": 21600, "time_ledger_sha256": "替换为计时账本 SHA256",
             **dict.fromkeys(HOST_FACTS), "cases": [{"id": "留出题号", "receipt_sha256": "首次运行回执文件原始 SHA256",
                                                   **dict.fromkeys(CASE_FACTS)}]}
 
 
 def example():
     return {"purpose": "pilot", "reference_method": "请填写已有 diffusion 参考的来源与选图规则",
-            "judges": ["reviewer1"], "min_reference_score": 0.5,
+            "judges": ["reviewer1", "reviewer2"], "min_reference_score": 0.5,
             "dimensions": {
                 "整体构图与层次": {"scope": "whole_image_visual", "weight": 1, "anchors": ["主体不可辨", "主体可辨但空间冲突",
                       "主体明确，前后关系部分成立", "前中后景清楚，局部抢焦", "层次和视觉主次连贯"]},
@@ -161,6 +180,8 @@ def example():
                 "method_sha256": "替换为冻结公共方法的 SHA256", "trusted_host": "受托宿主标识",
             "runtime_image": "local:替换为冻结运行环境摘要", "backend": "填写本次选择的 adapter",
             "budget": {"attempts": 1, "render_budget": 1, "wall_seconds": 300},
+                "min_holdout_cases": 48, "min_cases_per_family": 2,
+                "min_cases_per_layout": 2, "minimum_effective_wall_seconds": 21600,
                 "development": [{"id": "dev1", "prompt": "填写已见提示词", "family": "已见家族",
                                  "layout": "已见布局", "template": "已见模板"}],
                 "required_families": ["留出家族一", "留出家族二"], "required_layouts": ["留出布局一", "留出布局二"]},
@@ -222,6 +243,24 @@ def sheet_side(dimensions, requirements):
     return {"scores": dict.fromkeys(dimensions), "hard": dict.fromkeys(requirements)}
 
 
+def validate_candidate_receipt(receipt, case, lock_id, expected_method, expected_runtime, image_digest):
+    require(isinstance(receipt, dict) and receipt.get("schema") == "rsi.first_pass.v1",
+            "候选回执 schema 不符")
+    require(receipt.get("status") == "rendered" and receipt.get("id") == case["id"]
+            and receipt.get("contract") == lock_id
+            and receipt.get("prompt_sha256") == case["prompt_sha256"], "候选回执题目绑定不符")
+    if expected_method is not None:
+        require(receipt.get("method_sha256") == expected_method, "候选回执方法绑定不符")
+    if expected_runtime is not None:
+        require(receipt.get("runtime_image") == expected_runtime, "候选回执运行环境绑定不符")
+    require(receipt.get("image_sha256") == image_digest, "候选回执图像摘要不符")
+    require(receipt.get("attempt") == 1 and receipt.get("render_budget") == 1
+            and receipt.get("reference_inputs") == 0
+            and receipt.get("method_entry") == "method.render", "候选回执首发条件不符")
+    require(number(receipt.get("wall_seconds")) and receipt["wall_seconds"] >= 0
+            and sha(receipt.get("program_sha256")), "候选回执缺少程序摘要或耗时")
+
+
 def prepare(lock_path, candidate_path, destination):
     lock = locked(lock_path)
     spec = lock["contract"]
@@ -232,6 +271,7 @@ def prepare(lock_path, candidate_path, destination):
     refs = {c["reference_sha256"] for c in spec["cases"]}
     assets = []
     receipts = {}
+    gen = spec.get("generalization", {})
     for case in spec["cases"]:
         candidate = selected[case["id"]]
         require(candidate["prompt_sha256"] == case["prompt_sha256"], "候选提示词摘要不符")
@@ -244,7 +284,12 @@ def prepare(lock_path, candidate_path, destination):
         assets.append(((image, digest), (ref, case["reference_sha256"])))
         if candidate.get("receipt"):
             data = (Path(candidate_path).parent / candidate["receipt"]).read_bytes()
-            receipts[case["id"]] = {"sha256": hashlib.sha256(data).hexdigest(), "body": json.loads(data)}
+            body = json.loads(data)
+            validate_candidate_receipt(body, case, lock["id"], gen.get("method_sha256"),
+                                       gen.get("runtime_image"), digest)
+            receipts[case["id"]] = {"sha256": hashlib.sha256(data).hexdigest(), "body": body}
+        elif spec["purpose"] == "formal":
+            require(False, f"正式题目 {case['id']} 缺少首次执行回执")
 
     destination = Path(destination)
     require(not destination.exists(), "盲评目录已存在")
@@ -295,6 +340,10 @@ def generalization_issues(lock, key, raw, host):
             or host.get("host") != gen["trusted_host"] or host.get("contract") != lock["id"]
             or any(host.get(k) is not True for k in HOST_FACTS)):
         return ["独立宿主身份、合同或全局证言不符"]
+    if (not number(host.get("effective_wall_seconds"))
+            or host["effective_wall_seconds"] < gen["minimum_effective_wall_seconds"]
+            or not sha(host.get("time_ledger_sha256"))):
+        return ["有效研究时间或计时账本证据不足"]
     records = host.get("cases")
     if not isinstance(records, list) or any(not isinstance(h, dict) for h in records):
         return ["独立逐题证言缺失"]
@@ -312,10 +361,11 @@ def generalization_issues(lock, key, raw, host):
         body = receipt["body"]
         expected = {"schema": "rsi.first_pass.v1", "status": "rendered", "contract": lock["id"],
                     "id": case_id, "prompt_sha256": case["prompt_sha256"], "method_sha256": gen["method_sha256"],
-                    "attempt": 1, "render_budget": 1, "network": "none", "reference_inputs": 0,
+                    "attempt": 1, "render_budget": 1, "network": body.get("network"), "reference_inputs": 0,
                     "method_entry": "method.render",
                     "runtime_image": gen["runtime_image"]}
-        if (any(type(body.get(k)) is not type(v) or body[k] != v for k, v in expected.items())
+        if (body.get("network") not in ("none", "unverified")
+                or any(type(body.get(k)) is not type(v) or body[k] != v for k, v in expected.items())
                 or not sha(body.get("program_sha256"))
                 or not number(body.get("wall_seconds")) or not 0 <= body["wall_seconds"] <= gen["budget"]["wall_seconds"]
                 or any(r["code"]["image_sha256"] != body.get("image_sha256") for r in raw[case_id])):
@@ -429,6 +479,7 @@ def score(lock_path, packet, attestation_path=None):
         issues = generalization_issues(lock, key, raw, json.loads(document) if document is not None else None)
         evidence = {"trusted_host": gen["trusted_host"], "method_sha256": gen["method_sha256"],
                     "budget": gen["budget"], "runtime_image": gen["runtime_image"],
+                    "minimum_effective_wall_seconds": gen["minimum_effective_wall_seconds"],
                     "attestation_sha256": hashlib.sha256(document).hexdigest() if document is not None else None,
                     "receipt_sha256_by_case": {cid: r["sha256"] for cid, r in key["receipts"].items()}}
         bands = [ratio_band([p]) for p in points.values()]
@@ -446,11 +497,65 @@ def score(lock_path, packet, attestation_path=None):
             decision = "holdout_inconclusive"
         else:
             decision = FORMAL_PASS
-    return {**result, "status": decision, "descriptive_suite_quality": status,
+    group_counts = {field: {group: sum(c.get(field) == group for c in spec["cases"])
+                            for group in spec.get("generalization", {}).get("required_" + plural, [])}
+                   for field, plural in (("family", "families"), ("layout", "layouts"))}
+    return {**result, "status": decision, "case_count": len(spec["cases"]),
+            "group_counts": group_counts, "descriptive_suite_quality": status,
             "holdout_evidence_issues": issues, "evidence": evidence, "group_ratio_low_mid_high": groups,
             "points_low_mid_high": points, "mean_low_mid_high": means, "target": .9,
             "point_ratio": cmid / dmid if dmid else None, "rating_sensitivity_range": [lower, upper],
             "failed_hard": failed_hard, "weak_reference_cases": weak_refs}
+
+
+ROUND_DECISIONS = {"growth", "potential", "no_progress", "blocked"}
+
+
+def validate_round(path):
+    """Validate one machine-readable RSI round close without trusting its claims."""
+    close = read(path)
+    require(isinstance(close, dict) and close.get("schema") == "rsi.round_close.v1",
+            "round close schema 不符")
+    for field in ("round_id", "parent_method_sha256", "candidate_method_sha256", "next_action"):
+        require(isinstance(close.get(field), str) and close[field].strip(), f"round close 缺少 {field}")
+    for field in ("parent_method_sha256", "candidate_method_sha256"):
+        require(sha(close[field]), f"round close 的 {field} 必须是 SHA256")
+    decision = close.get("decision")
+    require(decision in ROUND_DECISIONS, "round close decision 无效")
+    for field in ("growth_evidence", "potential_evidence", "failed_cases", "new_holdout_coverage",
+                  "regressions", "subagent_reviews"):
+        require(isinstance(close.get(field), list), f"round close 的 {field} 必须为数组")
+    for field in ("wall_seconds", "compute_seconds"):
+        require(number(close.get(field)) and close[field] >= 0, f"round close 的 {field} 无效")
+    for field in ("images_created", "images_reviewed"):
+        require(type(close.get(field)) is int and close[field] >= 0, f"round close 的 {field} 无效")
+    require(close["images_reviewed"] <= close["images_created"], "评审数不能超过产图数")
+    if decision == "growth":
+        require(close["growth_evidence"], "growth 必须附带证据")
+        require(not close["potential_evidence"], "growth round 不应同时声明 potential")
+        for evidence in close["growth_evidence"]:
+            require(isinstance(evidence, dict), "growth evidence 必须为对象")
+            for field in ("evidence_id", "before", "after", "delta", "receipt_sha256", "comparison"):
+                require(isinstance(evidence.get(field), str) and evidence[field].strip(),
+                        f"growth evidence 缺少 {field}")
+            require(sha(evidence["receipt_sha256"]), "growth evidence receipt 摘要无效")
+    elif decision == "potential":
+        require(close["potential_evidence"], "potential 必须附带已执行探针证据")
+        for evidence in close["potential_evidence"]:
+            require(isinstance(evidence, dict), "potential evidence 必须为对象")
+            for field in ("evidence_id", "probe_receipt_sha256", "hypothesis", "falsifier", "next_test"):
+                require(isinstance(evidence.get(field), str) and evidence[field].strip(),
+                        f"potential evidence 缺少 {field}")
+            require(sha(evidence["probe_receipt_sha256"]), "potential probe 摘要无效")
+    elif decision == "no_progress":
+        require(not close["growth_evidence"] and not close["potential_evidence"],
+                "no_progress 不能同时声明 growth 或 potential 证据")
+        require(isinstance(close.get("changed_assumption"), str) and close["changed_assumption"].strip(),
+                "no_progress 必须说明改变的假设")
+    else:
+        require(isinstance(close.get("blocked_reason"), str) and close["blocked_reason"].strip(),
+                "blocked 必须说明阻塞来源")
+    return {"status": "valid", "round_id": close["round_id"], "decision": decision}
 
 
 def main():
@@ -458,6 +563,8 @@ def main():
     commands = parser.add_subparsers(dest="action", required=True)
     commands.add_parser("example")
     commands.add_parser("host-example")
+    round_parser = commands.add_parser("validate-round")
+    round_parser.add_argument("round", type=Path)
     for command, params in (("freeze", ["contract", "lock"]), ("prompts", ["lock"]),
                             ("prepare", ["lock", "candidates", "packet"]),
                             ("score", ["lock", "packet"])):
@@ -480,6 +587,8 @@ def main():
         elif args.action == "prepare":
             prepare(args.lock, args.candidates, args.packet)
             value = {"review": str(args.packet / "review")}
+        elif args.action == "validate-round":
+            value = validate_round(args.round)
         else:
             value = score(args.lock, args.packet, args.host_attestation)
         print(json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False))
