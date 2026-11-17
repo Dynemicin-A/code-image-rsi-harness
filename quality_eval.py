@@ -86,6 +86,10 @@ def sha(value):
     return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
 
 
+def runtime_id(value):
+    return isinstance(value, str) and re.fullmatch(r"(?:sha256|local):[0-9a-f]{64}", value) is not None
+
+
 FORMAL_PASS = "meets_quality_and_generalization_on_declared_holdouts"
 
 
@@ -99,8 +103,7 @@ def validate_holdout(spec):
     require(isinstance(gen["author_model"], str) and gen["author_model"].strip()
             and sha(gen["author_policy_sha256"]), "需冻结文字作者模型和生成策略")
     require(sha(gen["method_sha256"]), "必须冻结公共方法的 SHA256")
-    require(isinstance(gen["runtime_image"], str) and gen["runtime_image"].startswith("sha256:")
-            and sha(gen["runtime_image"][7:]), "必须冻结运行镜像摘要")
+    require(runtime_id(gen["runtime_image"]), "必须冻结运行环境摘要")
     budget = gen["budget"]
     require(type(budget["attempts"]) is int and budget["attempts"] == 1 and
             type(budget["render_budget"]) is int and budget["render_budget"] == 1 and
@@ -156,7 +159,8 @@ def example():
                       "主材质可辨，光向局部矛盾", "主要表面与光向协调", "表面、遮挡及反光关系一致"]}},
             "generalization": {"author_model": "", "author_policy_sha256": "",
                 "method_sha256": "替换为冻结公共方法的 SHA256", "trusted_host": "受托宿主标识",
-                "runtime_image": "sha256:替换为冻结镜像摘要", "budget": {"attempts": 1, "render_budget": 1, "wall_seconds": 300},
+            "runtime_image": "local:替换为冻结运行环境摘要", "backend": "local",
+            "budget": {"attempts": 1, "render_budget": 1, "wall_seconds": 300},
                 "development": [{"id": "dev1", "prompt": "填写已见提示词", "family": "已见家族",
                                  "layout": "已见布局", "template": "已见模板"}],
                 "required_families": ["留出家族一", "留出家族二"], "required_layouts": ["留出布局一", "留出布局二"]},
@@ -206,9 +210,12 @@ def locked(path):
 def prompts(lock_path):
     lock = locked(lock_path)
     spec = lock["contract"]
-    method = spec.get("generalization", {}).get("method_sha256")
+    gen = spec.get("generalization", {})
+    method = gen.get("method_sha256")
     return [{**{k: case[k] for k in ("id", "prompt", "prompt_sha256")}, "contract": lock["id"],
-             "method_sha256": method if sha(method) else None} for case in spec["cases"]]
+             "method_sha256": method if sha(method) else None,
+             "runtime_image": gen.get("runtime_image"), "backend": gen.get("backend", "local")}
+            for case in spec["cases"]]
 
 
 def sheet_side(dimensions, requirements):

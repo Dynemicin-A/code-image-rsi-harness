@@ -68,7 +68,8 @@ class QualityTest(unittest.TestCase):
     def test_prompts_manifest_hides_reference_and_criteria(self):
         self.lock_and_list()
         exported, = q.prompts(self.lock)
-        self.assertEqual(set(exported), {"id", "prompt", "prompt_sha256", "contract", "method_sha256"})
+        self.assertEqual(set(exported), {"id", "prompt", "prompt_sha256", "contract", "method_sha256",
+                                         "runtime_image", "backend"})
         self.assertEqual(exported["prompt"], self.spec["cases"][0]["prompt"])
 
     def test_cli_refuses_pilot_even_at_target(self):

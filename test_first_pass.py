@@ -1,14 +1,13 @@
 """End-to-end first-submission boundary tests with the preinstalled local renderer."""
 import json
 from pathlib import Path
-import shutil
 import struct
-import subprocess
+import sys
 import tempfile
 import unittest
 import zlib
 
-from first_pass import RUNTIME, digest, record
+from first_pass import digest, record
 
 
 METHOD = b"""from PIL import Image
@@ -21,10 +20,11 @@ PROGRAM = b"""def build(prompt):
 
 
 def local_runtime():
-    if not shutil.which('docker'):
+    try:
+        __import__('PIL')
+    except ImportError:
         return False
-    return subprocess.run(['docker', 'image', 'inspect', RUNTIME], stdout=subprocess.DEVNULL,
-                          stderr=subprocess.DEVNULL).returncode == 0
+    return bool(sys.executable)
 
 
 class FirstSubmissionTests(unittest.TestCase):
